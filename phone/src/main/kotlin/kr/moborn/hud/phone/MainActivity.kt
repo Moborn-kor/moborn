@@ -11,6 +11,7 @@ import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.Typeface
 import android.os.Build
+import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
 import android.text.InputType
@@ -35,7 +36,9 @@ class MainActivity : Activity() {
     private lateinit var status: TextView
     private lateinit var preview: TextView
     private lateinit var startButton: Button
-    private lateinit var walkPanel: LinearLayout
+    private lateinit var routePanel: LinearLayout
+    private lateinit var handoff: LinearLayout
+    private var chosen: Poi? = null
     private lateinit var results: LinearLayout
     private lateinit var keyInput: EditText
     private lateinit var destInput: EditText
@@ -78,6 +81,31 @@ class MainActivity : Activity() {
         setOnClickListener { onClick() }
     }
 
+    /** 라디오 버튼 묶음. 값이 바뀌면 onPick을 부른다. */
+    private fun radios(
+        options: List<Pair<String, String>>, current: String, baseId: Int,
+        horizontal: Boolean = false, onPick: (String) -> Unit,
+    ) = RadioGroup(this).apply {
+        orientation = if (horizontal) RadioGroup.HORIZONTAL else RadioGroup.VERTICAL
+        options.forEachIndexed { i, (value, text) ->
+            addView(RadioButton(this@MainActivity).apply {
+                id = baseId + i
+                this.text = text
+                setTextColor(Color.WHITE)
+                isChecked = current == value
+            })
+        }
+        setOnCheckedChangeListener { _, id -> onPick(options[id - baseId].first) }
+    }
+
+    private fun open(url: String) {
+        try {
+            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+        } catch (e: Exception) {
+            Toast.makeText(this, "열 수 있는 앱이 없습니다", Toast.LENGTH_SHORT).show()
+        }
+    }
+
     private fun buildUi(): View {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -93,58 +121,75 @@ class MainActivity : Activity() {
         startButton = button("시작") { toggleService() }
         root.addView(startButton)
 
-        // 모드 선택
-        root.addView(label("모드", 13f, color = Color.LTGRAY))
-        val modes = RadioGroup(this).apply { orientation = RadioGroup.VERTICAL }
-        val options = listOf(
-            HudState.MODE_CAR to "자동차 (티맵·네이버지도 안내 연동)",
-            HudState.MODE_WALK to "도보 (목적지 검색 후 자체 안내)",
-            HudState.MODE_DEMO to "데모 (안경 표시 확인용 가짜 주행)",
-        )
-        options.forEachIndexed { i, (mode, text) ->
-            modes.addView(RadioButton(this).apply {
-                id = 100 + i
-                this.text = text
-                setTextColor(Color.WHITE)
-                isChecked = HudBus.mode == mode
-            })
-        }
-        modes.setOnCheckedChangeListener { _, id ->
-            HudBus.mode = options[id - 100].first
-            if (HudBus.mode == HudState.MODE_DEMO) HudBus.demoStartedAt = System.currentTimeMillis()
+        // 정보 출처 선택
+        root.addView(label("안내 방식", 13f, color = Color.LTGRAY))
+        root.addView(radios(
+            listOf(
+                HudBus.SRC_ROUTE to "카카오 길안내 (목적지 검색 후 자체 안내)",
+                HudBus.SRC_NOTIF to "내비 앱 알림 연동 (네이버지도·카카오맵 등)",
+                HudBus.SRC_DEMO to "데모 (안경 표시 확인용 가짜 주행)",
+            ),
+            HudBus.source, 100,
+        ) {
+            HudBus.source = it
+            if (it == HudBus.SRC_DEMO) HudBus.demoStartedAt = System.currentTimeMillis()
             render()
-        }
-        root.addView(modes)
+        })
 
-        // 도보용 입력
-        walkPanel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        walkPanel.addView(label("티맵 API 키 (SK open API에서 발급)", 13f, color = Color.LTGRAY))
+        // 카카오 길안내 입력
+        routePanel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        routePanel.addView(label("이동 수단", 13f, color = Color.LTGRAY))
+        routePanel.addView(radios(
+            listOf(
+                HudState.MODE_WALK to "도보",
+                HudState.MODE_CAR to "자동차",
+                HudState.MODE_TRANSIT to "대중교통",
+            ),
+            HudBus.travel, 200, horizontal = true,
+        ) { HudBus.travel = it })
+
+        routePanel.addView(label("카카오 REST API 키", 13f, color = Color.LTGRAY))
         keyInput = EditText(this).apply {
             setText(Prefs.appKey(this@MainActivity))
-            hint = "appKey"
+            hint = "REST API 키 붙여넣기"
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
             setTextColor(Color.WHITE)
             setHintTextColor(Color.GRAY)
         }
-        walkPanel.addView(keyInput)
-        walkPanel.addView(label("목적지", 13f, color = Color.LTGRAY))
+        routePanel.addView(keyInput)
+        routePanel.addView(button("키 발급 페이지 열기 (카카오 개발자 사이트)") { open(Kakao.KEY_PAGE) })
+        routePanel.addView(
+            label(
+                "발급 순서: 로그인 → 앱 추가 → 앱 키의 'REST API 키' 복사 → 제품 설정에서 '카카오맵' 사용 켜기",
+                12f, color = Color.GRAY,
+            ),
+        )
+
+        routePanel.addView(label("목적지", 13f, color = Color.LTGRAY))
         destInput = EditText(this).apply {
             hint = "예: 시청역 2번 출구"
             inputType = InputType.TYPE_CLASS_TEXT
             setTextColor(Color.WHITE)
             setHintTextColor(Color.GRAY)
         }
-        walkPanel.addView(destInput)
-        walkPanel.addView(button("목적지 검색") { searchDest() })
+        routePanel.addView(destInput)
+        routePanel.addView(button("목적지 검색") { searchDest() })
         results = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        walkPanel.addView(results)
-        walkPanel.addView(CheckBox(this).apply {
-            text = "화살표를 머리 방향에 맞추기 (실험)"
+        routePanel.addView(results)
+
+        // 고른 목적지를 지도 앱에서도 열기
+        handoff = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; visibility = View.GONE }
+        handoff.addView(button("같은 목적지를 카카오맵에서 열기") { openInMapApp(kakao = true) })
+        handoff.addView(button("같은 목적지를 네이버지도에서 열기") { openInMapApp(kakao = false) })
+        routePanel.addView(handoff)
+
+        routePanel.addView(CheckBox(this).apply {
+            text = "화살표를 머리 방향에 맞추기 (도보, 실험)"
             setTextColor(Color.WHITE)
             isChecked = HudBus.useHead
             setOnCheckedChangeListener { _, on -> HudBus.useHead = on }
         })
-        root.addView(walkPanel)
+        root.addView(routePanel)
 
         // 권한
         root.addView(label("권한", 13f, color = Color.LTGRAY))
@@ -192,7 +237,8 @@ class MainActivity : Activity() {
             if (HudBus.connected) Color.parseColor("#3DDC84") else Color.parseColor("#FFB74D"),
         )
         startButton.text = if (running) "중지" else "시작"
-        walkPanel.visibility = if (HudBus.mode == HudState.MODE_WALK) View.VISIBLE else View.GONE
+        routePanel.visibility = if (HudBus.source == HudBus.SRC_ROUTE) View.VISIBLE else View.GONE
+        handoff.visibility = if (chosen != null) View.VISIBLE else View.GONE
 
         val s = HudBus.build()
         val parts = ArrayList<String>()
@@ -205,7 +251,7 @@ class MainActivity : Activity() {
         if (s.aux.isNotEmpty()) parts += s.aux
         if (s.note.isNotEmpty()) parts += s.note
         var text = "안경에 보내는 내용: " + parts.joinToString(" · ").ifEmpty { "없음" }
-        if (HudBus.mode == HudState.MODE_CAR && !notificationAccessGranted()) {
+        if (HudBus.source == HudBus.SRC_NOTIF && !notificationAccessGranted()) {
             text += "\n※ 내비 알림 읽기가 허용되지 않았습니다"
         }
         preview.text = text
@@ -260,7 +306,7 @@ class MainActivity : Activity() {
         val key = keyInput.text.toString().trim()
         val word = destInput.text.toString().trim()
         if (key.isEmpty() || word.isEmpty()) {
-            Toast.makeText(this, "API 키와 목적지를 입력해 주세요", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "카카오 키와 목적지를 입력해 주세요", Toast.LENGTH_SHORT).show()
             return
         }
         Prefs.setAppKey(this, key)
@@ -268,7 +314,7 @@ class MainActivity : Activity() {
         results.addView(label("검색 중…", 13f, color = Color.GRAY))
         Thread {
             try {
-                val list = Tmap.search(key, word, HudBus.position)
+                val list = Kakao.search(key, word, HudBus.position)
                 runOnUiThread { showResults(list) }
             } catch (e: Exception) {
                 HudBus.log("검색 실패: ${e.message}")
@@ -287,35 +333,66 @@ class MainActivity : Activity() {
             return
         }
         list.forEach { poi ->
-            results.addView(button("${poi.name}\n${poi.address}") { startWalk(poi) })
+            results.addView(button("${poi.name}\n${poi.address}") { startRoute(poi) })
         }
     }
 
-    private fun startWalk(dest: Poi) {
+    private fun startRoute(dest: Poi) {
         val from = HudBus.position
         if (from == null) {
             Toast.makeText(this, "현재 위치를 아직 못 잡았습니다. 시작을 누르고 잠시 기다려 주세요", Toast.LENGTH_LONG).show()
             return
         }
         val key = Prefs.appKey(this)
+        val travel = HudBus.travel
+        chosen = dest
         HudBus.destName = dest.name
         HudBus.note = "경로 탐색 중"
         HudBus.progress = null
         HudBus.tracker = null
         HudService.currentDest = dest
         results.removeAllViews()
+        render()
         Thread {
             try {
-                val route = Tmap.pedestrian(key, from, dest)
+                val route = Kakao.route(key, travel, from, dest.pos)
                 val tracker = RouteTracker(route)
                 HudBus.tracker = tracker
                 HudBus.progress = tracker.update(from)
                 HudBus.note = ""
-                HudBus.log("도보 경로: ${dest.name}, ${Fmt.dist(route.totalM)}, ${Fmt.mins(route.totalSec / 60)}")
+                HudBus.log(
+                    "경로: ${dest.name}, ${Fmt.dist(route.totalM)}, ${Fmt.mins(route.totalSec / 60)}, " +
+                        "점 ${route.points.size}개, 안내 ${route.steps.size}개",
+                )
+                route.steps.take(4).forEach { HudBus.log("  안내: ${it.turn.label} | ${it.text.take(40)}") }
             } catch (e: Exception) {
                 HudBus.note = "경로 탐색 실패"
                 HudBus.log("경로 탐색 실패: ${e.message}")
             }
         }.start()
+    }
+
+    /** 고른 목적지로 카카오맵/네이버지도 앱의 길찾기를 연다. 그 앱의 안내는 '내비 앱 알림 연동'으로 읽는다. */
+    private fun openInMapApp(kakao: Boolean) {
+        val d = chosen ?: return
+        val travel = HudBus.travel
+        val url = if (kakao) {
+            val by = when (travel) {
+                HudState.MODE_CAR -> "CAR"
+                HudState.MODE_TRANSIT -> "PUBLICTRANSIT"
+                else -> "FOOT"
+            }
+            val sp = HudBus.position?.let { "sp=${it.lat},${it.lon}&" } ?: ""
+            "kakaomap://route?${sp}ep=${d.pos.lat},${d.pos.lon}&by=$by"
+        } else {
+            val kind = when (travel) {
+                HudState.MODE_CAR -> "car"
+                HudState.MODE_TRANSIT -> "public"
+                else -> "walk"
+            }
+            "nmap://route/$kind?dlat=${d.pos.lat}&dlng=${d.pos.lon}&dname=" +
+                Uri.encode(d.name) + "&appname=$packageName"
+        }
+        open(url)
     }
 }

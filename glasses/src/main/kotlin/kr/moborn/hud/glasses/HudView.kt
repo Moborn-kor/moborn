@@ -70,10 +70,15 @@ class HudView(context: Context) : View(context) {
         val s = state
         val hasGuide = s.turn != Turn.NONE || s.distM >= 0
 
-        // --- 위쪽: 화살표 + 거리 ---
-        val arrowSize = 30 * u
-        val arrowCx = w * 0.30f
+        // --- 위쪽: 화살표 + 거리 (+ 오른쪽에 미니맵) ---
+        val hasMap = s.path.size >= 4 && s.pathM > 0
+        val arrowSize = (if (hasMap) 24 else 30) * u
+        val arrowCx = w * (if (hasMap) 0.18f else 0.30f)
         val arrowCy = h * 0.36f
+        val textX = w * (if (hasMap) 0.33f else 0.52f)
+        val textW = w * (if (hasMap) 0.37f else 0.46f)
+        // 안내 문구가 거리 아래 칸에 안 들어가면 가운데 줄 전체를 쓴다.
+        var longLabel = ""
         if (hasGuide) {
             line.strokeWidth = 5.5f * u
             line.color = fg
@@ -86,21 +91,27 @@ class HudView(context: Context) : View(context) {
             text.textAlign = Paint.Align.LEFT
             if (s.distM >= 0) {
                 text.color = fg
-                text.textSize = 20 * u
-                c.drawText(Fmt.dist(s.distM), w * 0.52f, h * 0.36f, text)
+                text.textSize = (if (hasMap) 17 else 20) * u
+                c.drawText(Fmt.dist(s.distM), textX, h * 0.36f, text)
             }
             val label = s.instr.ifEmpty { s.turn.label }
             if (label.isNotEmpty()) {
                 text.color = dim
                 text.textSize = 7 * u
-                c.drawText(ellipsize(label, w * 0.46f), w * 0.52f, h * 0.50f, text)
+                if (text.measureText(label) <= textW) {
+                    c.drawText(label, textX, h * 0.50f, text)
+                } else {
+                    longLabel = label
+                }
             }
         } else if (s.note.isNotEmpty()) {
             drawCentered(c, s.note, w / 2, h * 0.36f, 8 * u, dim)
         }
+        if (hasMap) drawMiniMap(c, s, w * 0.72f, h * 0.05f, w * 0.98f, h * 0.57f, u)
 
         // --- 가운데 줄: 보조 정보(휴게소·주유소) 또는 상태 문구 ---
         val mid = when {
+            longLabel.isNotEmpty() -> longLabel
             s.aux.isNotEmpty() -> s.aux
             hasGuide && s.note.isNotEmpty() -> s.note
             else -> ""
@@ -109,30 +120,69 @@ class HudView(context: Context) : View(context) {
 
         // --- 아래쪽: 속도 | 남은 거리·시간 | 도착 시각 ---
         val baseY = h * 0.84f
+        var leftEdge = w * 0.04f
+        var rightEdge = w * 0.96f
         if (s.speedKmh >= 0) {
             text.textAlign = Paint.Align.LEFT
             text.color = fg
             text.textSize = 13 * u
             val v = s.speedKmh.toString()
-            c.drawText(v, w * 0.04f, baseY, text)
-            val vw = text.measureText(v)
+            c.drawText(v, leftEdge, baseY, text)
+            leftEdge += text.measureText(v) + u
             text.textSize = 5 * u
             text.color = dim
-            c.drawText("km/h", w * 0.04f + vw + u, baseY, text)
+            c.drawText("km/h", leftEdge, baseY, text)
+            leftEdge += text.measureText("km/h")
         }
-        val remain = listOf(Fmt.dist(s.remainM), Fmt.mins(s.remainMin)).filter { it.isNotEmpty() }.joinToString("  ")
-        if (remain.isNotEmpty()) drawCentered(c, remain, w * 0.56f, baseY, 8 * u, fg)
         if (s.eta.isNotEmpty()) {
             text.textAlign = Paint.Align.RIGHT
             text.color = fg
             text.textSize = 8 * u
-            c.drawText(s.eta, w * 0.96f, baseY, text)
+            c.drawText(s.eta, rightEdge, baseY, text)
+            rightEdge -= text.measureText(s.eta)
+        }
+        // 남은 거리·시간은 속도와 도착 시각 사이 빈칸의 가운데에, 넘치면 글자를 줄여서 넣는다.
+        val remain = listOf(Fmt.dist(s.remainM), Fmt.mins(s.remainMin)).filter { it.isNotEmpty() }.joinToString("  ")
+        if (remain.isNotEmpty()) {
+            val room = rightEdge - leftEdge - 6 * u
+            var size = 8 * u
+            text.textSize = size
+            val need = text.measureText(remain)
+            if (need > room && room > 0) size *= room / need
+            drawCentered(c, remain, (leftEdge + rightEdge) / 2, baseY, size, fg)
         }
 
         // --- 맨 아래: 목적지 ---
         if (s.dest.isNotEmpty()) {
             drawCentered(c, ellipsize("→ ${s.dest}", w * 0.9f, 5.5f * u), w / 2, h * 0.96f, 5.5f * u, dim)
         }
+    }
+
+    /**
+     * 앞으로 갈 경로만 선으로 그리는 미니맵. 내 위치는 아래쪽 가운데의 점, 진행 방향이 위쪽.
+     * 상자 높이가 pathM 미터에 해당한다.
+     */
+    private fun drawMiniMap(c: Canvas, s: HudState, left: Float, top: Float, right: Float, bottom: Float, u: Float) {
+        val scale = (bottom - top - 4 * u) / s.pathM
+        val ox = (left + right) / 2
+        val oy = bottom - 3 * u
+        val p = Path()
+        var i = 0
+        while (i + 1 < s.path.size) {
+            val x = ox + s.path[i] * scale
+            val y = oy - s.path[i + 1] * scale
+            if (i == 0) p.moveTo(x, y) else p.lineTo(x, y)
+            i += 2
+        }
+        c.save()
+        c.clipRect(left, top, right, bottom)
+        line.strokeWidth = 2.4f * u
+        line.color = fg
+        c.drawPath(p, line)
+        c.restore()
+        // 내 위치
+        text.color = fg
+        c.drawCircle(ox, oy, 2.6f * u, text)
     }
 
     /** 아래에서 올라와 회전 방향으로 꺾이는 화살표 */

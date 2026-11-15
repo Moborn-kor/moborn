@@ -96,7 +96,7 @@ class HudService : Service(), LocationListener {
 
     private fun startLocation() {
         if (!granted(Manifest.permission.ACCESS_FINE_LOCATION)) {
-            HudBus.log("위치 권한이 없어 속도와 도보 안내를 쓸 수 없습니다")
+            HudBus.log("위치 권한이 없어 속도와 경로 안내를 쓸 수 없습니다")
             return
         }
         try {
@@ -114,19 +114,21 @@ class HudService : Service(), LocationListener {
         HudBus.speedKmh = if (loc.hasSpeed()) (loc.speed * 3.6f).roundToInt() else -1
 
         val tracker = HudBus.tracker
-        if (HudBus.mode == HudState.MODE_WALK && tracker != null) {
+        if (HudBus.source == HudBus.SRC_ROUTE && tracker != null) {
             val p = tracker.update(pos)
             HudBus.progress = p
             if (p.arrived) HudBus.note = "도착"
-            checkReroute(p.offRouteM, pos)
+            // 대중교통은 지하에서 위치가 튀므로 자동 재탐색을 하지 않는다.
+            if (HudBus.travel != HudState.MODE_TRANSIT) checkReroute(p.offRouteM, pos)
         }
         HudBus.changed()
     }
 
-    /** 경로에서 40m 넘게 10초 이상 벗어나면 다시 탐색한다. 20초에 한 번까지만. */
+    /** 경로에서 벗어난 채 10초가 지나면 다시 탐색한다. 20초에 한 번까지만. */
     private fun checkReroute(offM: Int, pos: LatLon) {
         val now = System.currentTimeMillis()
-        if (offM <= 40) {
+        val limit = if (HudBus.travel == HudState.MODE_CAR) 60 else 40
+        if (offM <= limit) {
             offRouteSince = 0
             return
         }
@@ -136,10 +138,11 @@ class HudService : Service(), LocationListener {
         offRouteSince = 0
         val dest = currentDest ?: return
         val key = Prefs.appKey(this)
+        val travel = HudBus.travel
         HudBus.note = "경로 재탐색 중"
         Thread {
             try {
-                val route = Tmap.pedestrian(key, pos, dest)
+                val route = Kakao.route(key, travel, pos, dest.pos)
                 HudBus.tracker = RouteTracker(route)
                 HudBus.note = ""
                 HudBus.log("경로 재탐색 완료")
@@ -182,6 +185,6 @@ class HudService : Service(), LocationListener {
 
 object Prefs {
     private fun p(c: Context) = c.getSharedPreferences("hud", Context.MODE_PRIVATE)
-    fun appKey(c: Context): String = p(c).getString("tmapKey", "") ?: ""
-    fun setAppKey(c: Context, v: String) = p(c).edit().putString("tmapKey", v.trim()).apply()
+    fun appKey(c: Context): String = p(c).getString("kakaoKey", "") ?: ""
+    fun setAppKey(c: Context, v: String) = p(c).edit().putString("kakaoKey", v.trim()).apply()
 }

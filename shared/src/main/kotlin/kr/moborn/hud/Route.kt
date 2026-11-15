@@ -1,6 +1,5 @@
 package kr.moborn.hud
 
-import org.json.JSONObject
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.roundToInt
@@ -122,6 +121,40 @@ class RouteTracker(val route: Route) {
         )
     }
 
+    /**
+     * 미니맵용: 마지막으로 맞춘 위치에서 앞으로 aheadM 미터까지의 경로를
+     * "내 위치가 원점, 진행 방향이 위쪽(+y)"인 미터 좌표로 돌려준다. [x0,y0,x1,y1,...]
+     */
+    fun ahead(pos: LatLon, aheadM: Int): List<Int> {
+        val pts = route.points
+        if (pts.size < 2) return emptyList()
+        val (t, _) = Geo.project(pos, pts[seg], pts[seg + 1])
+        val a = pts[seg]
+        val b = pts[seg + 1]
+        val here = LatLon(a.lat + (b.lat - a.lat) * t, a.lon + (b.lon - a.lon) * t)
+        val heading = Math.toRadians(Geo.bearing(a, b))
+        val kx = 111_320.0 * cos(Math.toRadians(here.lat))
+        val ky = 110_540.0
+        val out = ArrayList<Int>()
+        out += 0; out += 0
+        var travelled = 0.0
+        var prev = here
+        var i = seg + 1
+        while (i < pts.size && travelled < aheadM && out.size < 60) {
+            val p = pts[i]
+            travelled += Geo.distance(prev, p)
+            val east = (p.lon - here.lon) * kx
+            val north = (p.lat - here.lat) * ky
+            // 진행 방향이 위로 오도록 회전
+            val x = east * cos(heading) - north * sin(heading)
+            val y = east * sin(heading) + north * cos(heading)
+            out += x.roundToInt(); out += y.roundToInt()
+            prev = p
+            i++
+        }
+        return out
+    }
+
     /** (선분 번호, 선분 위 비율, 거리 m) */
     private fun nearest(pos: LatLon, from: Int, to: Int): Triple<Int, Double, Double> {
         var bi = from
@@ -134,49 +167,5 @@ class RouteTracker(val route: Route) {
             }
         }
         return Triple(bi, bt, bd)
-    }
-}
-
-/** 티맵 보행자 경로 응답(GeoJSON)을 Route로 바꾼다. */
-object TmapParser {
-    fun turnOf(code: Int): Turn = when (code) {
-        11 -> Turn.STRAIGHT
-        12 -> Turn.LEFT
-        13 -> Turn.RIGHT
-        14 -> Turn.UTURN
-        16 -> Turn.SHARP_LEFT
-        17 -> Turn.SLIGHT_LEFT
-        18 -> Turn.SLIGHT_RIGHT
-        19 -> Turn.SHARP_RIGHT
-        201 -> Turn.ARRIVE
-        else -> Turn.STRAIGHT // 횡단보도, 육교, 계단 등은 문구로 안내
-    }
-
-    fun parsePedestrian(json: String): Route {
-        val features = JSONObject(json).getJSONArray("features")
-        val points = ArrayList<LatLon>()
-        val steps = ArrayList<Step>()
-        var totalM = 0
-        var totalSec = 0
-        for (i in 0 until features.length()) {
-            val f = features.getJSONObject(i)
-            val g = f.getJSONObject("geometry")
-            val p = f.optJSONObject("properties") ?: JSONObject()
-            if (p.has("totalDistance")) totalM = p.optInt("totalDistance")
-            if (p.has("totalTime")) totalSec = p.optInt("totalTime")
-            val c = g.getJSONArray("coordinates")
-            when (g.getString("type")) {
-                "Point" -> {
-                    val idx = (points.size - 1).coerceAtLeast(0)
-                    steps += Step(idx, turnOf(p.optInt("turnType", 11)), p.optString("description", ""))
-                }
-                "LineString" -> for (j in 0 until c.length()) {
-                    val xy = c.getJSONArray(j)
-                    val ll = LatLon(xy.getDouble(1), xy.getDouble(0))
-                    if (points.isEmpty() || points.last() != ll) points += ll
-                }
-            }
-        }
-        return Route(points, steps, totalM, totalSec)
     }
 }

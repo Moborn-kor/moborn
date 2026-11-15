@@ -1,5 +1,6 @@
 package kr.moborn.hud
 
+import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
 
@@ -47,6 +48,10 @@ data class HudState(
     val useHead: Boolean = false,
     /** 상태 안내 문구(경로 탐색 중 등) */
     val note: String = "",
+    /** 미니맵: 앞으로 갈 경로. 내 위치가 원점, 진행 방향이 +y인 미터 좌표 [x0,y0,x1,y1,...] */
+    val path: List<Int> = emptyList(),
+    /** 미니맵이 담는 앞쪽 거리(m) */
+    val pathM: Int = 0,
 ) {
     fun toJson(): String = JSONObject().apply {
         put("mode", mode); put("turn", turn.name); put("distM", distM)
@@ -54,12 +59,16 @@ data class HudState(
         put("remainM", remainM); put("remainMin", remainMin); put("eta", eta)
         put("dest", dest); put("aux", aux); put("bearing", bearing)
         put("useHead", useHead); put("note", note)
+        if (path.isNotEmpty()) {
+            put("path", JSONArray(path)); put("pathM", pathM)
+        }
     }.toString()
 
     companion object {
         const val MODE_IDLE = "idle"
         const val MODE_CAR = "car"
         const val MODE_WALK = "walk"
+        const val MODE_TRANSIT = "transit"
         const val MODE_DEMO = "demo"
 
         fun fromJson(line: String): HudState? = try {
@@ -79,6 +88,8 @@ data class HudState(
                 bearing = o.optInt("bearing", -1),
                 useHead = o.optBoolean("useHead", false),
                 note = o.optString("note", ""),
+                path = o.optJSONArray("path")?.let { a -> List(a.length()) { a.optInt(it) } } ?: emptyList(),
+                pathM = o.optInt("pathM", 0),
             )
         } catch (e: Exception) {
             null
